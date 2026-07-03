@@ -391,9 +391,14 @@ class CanMonitorApp(ctk.CTk):
         ts = str(entry['timestamp'])[-10:].ljust(12)
         direction = entry['direction'].ljust(4)
         chn_str = f"CAN{entry['chn']}".ljust(6)
-        id_str = f"0x{entry['can_id']:08X}".ljust(12)
+        # 标准帧显示3位hex，扩展帧显示8位hex
+        is_ext = "扩展" in entry['frame_type']
+        if is_ext:
+            id_str = f"0x{entry['can_id']:08X}".ljust(12)
+        else:
+            id_str = f"0x{entry['can_id']:03X}".ljust(12)
         # 用英文缩写保证对齐: STD/EXT + DAT/RTR
-        ft = "EXT" if "扩展" in entry['frame_type'] else "STD"
+        ft = "EXT" if is_ext else "STD"
         ff = "RTR" if "远程" in entry['frame_format'] else "DAT"
         type_str = f"{ft} {ff}".ljust(8)
         dlc_str = str(entry['dlc']).ljust(4)
