@@ -105,11 +105,11 @@ class CanMonitorApp(ctk.CTk):
         self.msg_queue = deque(maxlen=MAX_LOG_LINES)
         self.auto_scroll = True
         self.line_count = 0
+        self.device_connected = False
 
         self._build_ui()
-        self._start_receive_threads()
 
-        # 定时刷新报文
+        # 定时刷新报文（即使未连接也启动，后续有数据才显示）
         self._poll_messages()
 
         # 窗口关闭事件
@@ -117,38 +117,122 @@ class CanMonitorApp(ctk.CTk):
 
     def _build_ui(self):
         """构建界面"""
+        # ===== 设备连接面板 =====
+        self.conn_frame = ctk.CTkFrame(self, height=40, corner_radius=0)
+        self.conn_frame.pack(fill="x", padx=0, pady=0)
+        self.conn_frame.pack_propagate(False)
+
+        # 设备状态指示
+        self.device_indicator = ctk.CTkLabel(
+            self.conn_frame,
+            text="  ● 设备未连接",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color="#F44336"
+        )
+        self.device_indicator.pack(side="left", padx=10)
+
+        # 设备类型
+        ctk.CTkLabel(
+            self.conn_frame,
+            text="  USBCAN-II",
+            font=ctk.CTkFont(size=12),
+            text_color="#888888"
+        ).pack(side="left")
+
+        # 波特率选择
+        ctk.CTkLabel(
+            self.conn_frame,
+            text="  波特率:",
+            font=ctk.CTkFont(size=12),
+            text_color="#AAAAAA"
+        ).pack(side="left", padx=(15, 5))
+
+        self.baud_combo = ctk.CTkComboBox(
+            self.conn_frame, width=100,
+            values=[f"{int(b)//1000}K" if int(b) >= 1000 else b for b in BAUD_RATE_OPTIONS],
+            font=ctk.CTkFont(size=12),
+            state="readonly"
+        )
+        default_idx = BAUD_RATE_OPTIONS.index(BAUD_RATE) if BAUD_RATE in BAUD_RATE_OPTIONS else 13
+        self.baud_combo.set(f"{int(BAUD_RATE_OPTIONS[default_idx])//1000}K" if int(BAUD_RATE_OPTIONS[default_idx]) >= 1000 else BAUD_RATE_OPTIONS[default_idx])
+        self.baud_combo.pack(side="left", padx=(0, 10))
+
+        # 连接/断开按钮
+        self.connect_btn = ctk.CTkButton(
+            self.conn_frame, text="打开设备", width=90, height=28,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#4CAF50", hover_color="#388E3C",
+            command=self._do_connect
+        )
+        self.connect_btn.pack(side="right", padx=10)
+
+        # ===== 通道启停面板 =====
+        self.channel_frame = ctk.CTkFrame(self, height=36, corner_radius=0, fg_color="#1E1E1E")
+        self.channel_frame.pack_propagate(False)
+        # 初始隐藏，设备连接后才显示
+
+        ctk.CTkLabel(
+            self.channel_frame,
+            text="  通道控制:",
+            font=ctk.CTkFont(size=12),
+            text_color="#AAAAAA"
+        ).pack(side="left", padx=5)
+
+        self.chn0_start_btn = ctk.CTkButton(
+            self.channel_frame, text="启动 CAN0", width=90, height=26,
+            font=ctk.CTkFont(size=11),
+            fg_color="#4CAF50", hover_color="#388E3C",
+            command=lambda: self._do_start_channel(0)
+        )
+        self.chn0_start_btn.pack(side="left", padx=3)
+
+        self.chn0_status_label = ctk.CTkLabel(
+            self.channel_frame, text="未启动", font=ctk.CTkFont(size=11), text_color="#888888"
+        )
+        self.chn0_status_label.pack(side="left", padx=(0, 10))
+
+        self.chn1_start_btn = ctk.CTkButton(
+            self.channel_frame, text="启动 CAN1", width=90, height=26,
+            font=ctk.CTkFont(size=11),
+            fg_color="#4CAF50", hover_color="#388E3C",
+            command=lambda: self._do_start_channel(1)
+        )
+        self.chn1_start_btn.pack(side="left", padx=3)
+
+        self.chn1_status_label = ctk.CTkLabel(
+            self.channel_frame, text="未启动", font=ctk.CTkFont(size=11), text_color="#888888"
+        )
+        self.chn1_status_label.pack(side="left", padx=(0, 10))
+
+        self.chn_all_start_btn = ctk.CTkButton(
+            self.channel_frame, text="启动全部", width=80, height=26,
+            font=ctk.CTkFont(size=11),
+            fg_color="#2196F3", hover_color="#1976D2",
+            command=self._do_start_all_channels
+        )
+        self.chn_all_start_btn.pack(side="left", padx=3)
+
+        self.chn_all_stop_btn = ctk.CTkButton(
+            self.channel_frame, text="停止全部", width=80, height=26,
+            font=ctk.CTkFont(size=11),
+            fg_color="#F44336", hover_color="#D32F2F",
+            command=self._do_stop_all_channels
+        )
+        self.chn_all_stop_btn.pack(side="left", padx=3)
+
         # ===== 顶部状态栏 =====
-        self.status_frame = ctk.CTkFrame(self, height=40, corner_radius=0)
+        self.status_frame = ctk.CTkFrame(self, height=32, corner_radius=0)
         self.status_frame.pack(fill="x", padx=0, pady=0)
         self.status_frame.pack_propagate(False)
 
-        # 通道状态指示
         self.channel_labels = {}
-        for i, chn in enumerate(chn_handles):
-            indicator = ctk.CTkLabel(
-                self.status_frame,
-                text=f"  ● CAN{chn}  ",
-                font=ctk.CTkFont(size=13, weight="bold"),
-                text_color="#4CAF50"
-            )
-            indicator.pack(side="left", padx=(10 if i == 0 else 0, 0))
-            self.channel_labels[chn] = indicator
-
-        # 波特率显示
-        baud_label = ctk.CTkLabel(
-            self.status_frame,
-            text=f"  {BAUD_RATE} bps",
-            font=ctk.CTkFont(size=12),
-            text_color="#888888"
-        )
-        baud_label.pack(side="left", padx=(15, 0))
 
         # 收发计数（右侧）
         self.stats_label = ctk.CTkLabel(
             self.status_frame,
-            text="",
+            text="等待设备连接...",
             font=ctk.CTkFont(size=12, family="Consolas"),
-            text_color="#AAAAAA"
+            text_color="#888888"
         )
         self.stats_label.pack(side="right", padx=15)
 
@@ -221,11 +305,11 @@ class CanMonitorApp(ctk.CTk):
         ctk.CTkLabel(row1, text="通道:", font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 5))
         self.chn_combo = ctk.CTkComboBox(
             row1, width=80,
-            values=[f"CAN{c}" for c in chn_handles],
+            values=["--"],
             font=ctk.CTkFont(size=12),
             state="readonly"
         )
-        self.chn_combo.set(f"CAN{list(chn_handles.keys())[0]}")
+        self.chn_combo.set("--")
         self.chn_combo.pack(side="left", padx=(0, 15))
 
         ctk.CTkLabel(row1, text="ID (hex):", font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 5))
@@ -310,6 +394,187 @@ class CanMonitorApp(ctk.CTk):
             t = threading.Thread(target=self._receive_loop, args=(chn, handle), daemon=True)
             t.start()
 
+    # ========== 设备连接与通道管理 ==========
+
+    def _get_baud_value(self):
+        """从下拉框文本还原为实际波特率数值字符串"""
+        text = self.baud_combo.get()
+        display_values = [f"{int(b)//1000}K" if int(b) >= 1000 else b for b in BAUD_RATE_OPTIONS]
+        try:
+            idx = display_values.index(text)
+            return BAUD_RATE_OPTIONS[idx]
+        except ValueError:
+            if text.upper().endswith("K"):
+                return str(int(text[:-1]) * 1000)
+            return text
+
+    def _do_connect(self):
+        """打开设备"""
+        global device_handle, BAUD_RATE
+        BAUD_RATE = self._get_baud_value()
+        device_handle = zcanlib.OpenDevice(ZCAN_USBCAN2, 0, 0)
+        if device_handle == INVALID_DEVICE_HANDLE:
+            messagebox.showerror("错误", "打开设备失败！\n请检查设备连接和驱动。")
+            return
+
+        self.device_connected = True
+        self.device_indicator.configure(text="  ● 设备已连接", text_color="#4CAF50")
+        self.connect_btn.configure(text="关闭设备", fg_color="#F44336", hover_color="#D32F2F",
+                                   command=self._do_disconnect)
+        self.channel_frame.pack(fill="x", padx=0, pady=0, before=self.status_frame)
+        self.stats_label.configure(text="请启动通道...")
+        self._add_sys_message(f"设备已连接，波特率: {BAUD_RATE} bps")
+
+    def _do_disconnect(self):
+        """关闭设备"""
+        self._do_stop_all_channels()
+        global device_handle
+        if device_handle is not None:
+            zcanlib.CloseDevice(device_handle)
+            device_handle = None
+
+        self.device_connected = False
+        self.device_indicator.configure(text="  ● 设备未连接", text_color="#F44336")
+        self.connect_btn.configure(text="打开设备", fg_color="#4CAF50", hover_color="#388E3C",
+                                   command=self._do_connect)
+        self.channel_frame.pack_forget()
+        self.stats_label.configure(text="等待设备连接...")
+        self._update_chn_combo()
+        self._update_status_bar_clear()
+        self._add_sys_message("设备已关闭")
+
+    def _do_start_channel(self, chn):
+        """启动指定CAN通道"""
+        global BAUD_RATE
+        if chn in chn_handles:
+            messagebox.showwarning("提示", f"CAN{chn} 已经启动")
+            return
+        if not self.device_connected:
+            messagebox.showerror("错误", "请先打开设备")
+            return
+
+        BAUD_RATE = self._get_baud_value()
+        handle = start_channel(chn)
+        if handle is None:
+            messagebox.showerror("错误", f"启动 CAN{chn} 通道失败！")
+            return
+
+        chn_handles[chn] = handle
+        rx_count[chn] = 0
+        tx_count[chn] = 0
+
+        # 启动接收线程
+        t = threading.Thread(target=self._receive_loop, args=(chn, handle), daemon=True)
+        t.start()
+
+        self._update_channel_status(chn, True)
+        self._update_status_bar()
+        self._update_chn_combo()
+        self._add_sys_message(f"CAN{chn} 通道已启动")
+
+    def _do_start_all_channels(self):
+        """启动全部通道"""
+        for chn in [0, 1]:
+            if chn not in chn_handles:
+                self._do_start_channel(chn)
+
+    def _do_stop_channel(self, chn):
+        """停止指定通道"""
+        if chn not in chn_handles:
+            return
+        handle = chn_handles.pop(chn, None)
+        if handle is not None:
+            zcanlib.ResetCAN(handle)
+        rx_count.pop(chn, None)
+        tx_count.pop(chn, None)
+
+        self._update_channel_status(chn, False)
+        self._update_status_bar()
+        self._update_chn_combo()
+        self._add_sys_message(f"CAN{chn} 通道已停止")
+
+    def _do_stop_all_channels(self):
+        """停止全部通道"""
+        for chn in list(chn_handles.keys()):
+            self._do_stop_channel(chn)
+
+    def _update_channel_status(self, chn, active):
+        """更新通道启动按钮和状态标签"""
+        if chn == 0:
+            if active:
+                self.chn0_start_btn.configure(text="停止 CAN0", fg_color="#F44336", hover_color="#D32F2F",
+                                              command=lambda: self._do_stop_channel(0))
+                self.chn0_status_label.configure(text="运行中", text_color="#4CAF50")
+            else:
+                self.chn0_start_btn.configure(text="启动 CAN0", fg_color="#4CAF50", hover_color="#388E3C",
+                                              command=lambda: self._do_start_channel(0))
+                self.chn0_status_label.configure(text="未启动", text_color="#888888")
+        elif chn == 1:
+            if active:
+                self.chn1_start_btn.configure(text="停止 CAN1", fg_color="#F44336", hover_color="#D32F2F",
+                                              command=lambda: self._do_stop_channel(1))
+                self.chn1_status_label.configure(text="运行中", text_color="#4CAF50")
+            else:
+                self.chn1_start_btn.configure(text="启动 CAN1", fg_color="#4CAF50", hover_color="#388E3C",
+                                              command=lambda: self._do_start_channel(1))
+                self.chn1_status_label.configure(text="未启动", text_color="#888888")
+
+    def _update_status_bar(self):
+        """更新状态栏中的通道指示器"""
+        for label in self.channel_labels.values():
+            label.destroy()
+        self.channel_labels.clear()
+
+        for i, chn in enumerate(sorted(chn_handles.keys())):
+            indicator = ctk.CTkLabel(
+                self.status_frame,
+                text=f"  ● CAN{chn}  ",
+                font=ctk.CTkFont(size=13, weight="bold"),
+                text_color="#4CAF50"
+            )
+            indicator.pack(side="left", padx=(10 if i == 0 else 0, 0))
+            self.channel_labels[chn] = indicator
+
+        if chn_handles:
+            baud_label = ctk.CTkLabel(
+                self.status_frame,
+                text=f"  {BAUD_RATE} bps",
+                font=ctk.CTkFont(size=12),
+                text_color="#888888"
+            )
+            baud_label.pack(side="left", padx=(15, 0))
+
+    def _update_status_bar_clear(self):
+        """清空状态栏指示器"""
+        for label in self.channel_labels.values():
+            label.destroy()
+        self.channel_labels.clear()
+
+    def _update_chn_combo(self):
+        """更新发送面板的通道选择下拉框"""
+        active_channels = sorted(chn_handles.keys())
+        if active_channels:
+            values = [f"CAN{c}" for c in active_channels]
+            self.chn_combo.configure(values=values)
+            self.chn_combo.set(values[0])
+        else:
+            self.chn_combo.configure(values=["--"])
+            self.chn_combo.set("--")
+
+    def _add_sys_message(self, text):
+        """添加系统消息到报文区"""
+        entry = {
+            'timestamp': int(time.time() * 1000000),
+            'chn': 0,
+            'direction': "SYS",
+            'can_id': 0,
+            'frame_type': "标准帧",
+            'frame_format': "数据帧",
+            'dlc': 0,
+            'data': text
+        }
+        self.msg_queue.append(entry)
+
     def _receive_loop(self, chn, chn_handle):
         """接收线程"""
         while thread_flag:
@@ -388,30 +653,34 @@ class CanMonitorApp(ctk.CTk):
 
     def _append_message(self, entry):
         """添加一条报文到显示区"""
-        ts = str(entry['timestamp'])[-10:].ljust(12)
-        direction = entry['direction'].ljust(4)
-        chn_str = f"CAN{entry['chn']}".ljust(6)
-        # 标准帧显示3位hex，扩展帧显示8位hex
-        is_ext = "扩展" in entry['frame_type']
-        if is_ext:
-            id_str = f"0x{entry['can_id']:08X}".ljust(12)
+        if entry['direction'] == "SYS":
+            # 系统消息：完整一行显示
+            line = f"-- {entry['data']} --\n"
+            tag = "sys"
         else:
-            id_str = f"0x{entry['can_id']:03X}".ljust(12)
-        # 用英文缩写保证对齐: STD/EXT + DAT/RTR
-        ft = "EXT" if is_ext else "STD"
-        ff = "RTR" if "远程" in entry['frame_format'] else "DAT"
-        type_str = f"{ft} {ff}".ljust(8)
-        dlc_str = str(entry['dlc']).ljust(4)
-        data_str = entry['data']
+            ts = str(entry['timestamp'])[-10:].ljust(12)
+            direction = entry['direction'].ljust(4)
+            chn_str = f"CAN{entry['chn']}".ljust(6)
+            is_ext = "扩展" in entry['frame_type']
+            if is_ext:
+                id_str = f"0x{entry['can_id']:08X}".ljust(12)
+            else:
+                id_str = f"0x{entry['can_id']:03X}".ljust(12)
+            ft = "EXT" if is_ext else "STD"
+            ff = "RTR" if "远程" in entry['frame_format'] else "DAT"
+            type_str = f"{ft} {ff}".ljust(8)
+            dlc_str = str(entry['dlc']).ljust(4)
+            data_str = entry['data']
+            line = f"{ts}{direction}{chn_str}{id_str}{type_str}{dlc_str}{data_str}\n"
 
-        tag = "rx" if entry['direction'] == "RX" else "tx"
+            tag = "rx" if entry['direction'] == "RX" else "tx"
 
-        # 组合行（用固定宽度对齐）
-        line = f"{ts}{direction}{chn_str}{id_str}{type_str}{dlc_str}{data_str}\n"
         self.msg_text._textbox.insert("end", line, tag)
 
     def _update_stats(self):
         """更新收发统计"""
+        if not chn_handles:
+            return
         stats_parts = []
         for chn in chn_handles:
             r = rx_count.get(chn, 0)
@@ -597,166 +866,11 @@ class CanMonitorApp(ctk.CTk):
         self.destroy()
 
 
-# ========== 启动对话框 ==========
-
-class SetupDialog(ctk.CTk):
-    """启动配置对话框：选择通道和波特率"""
-    def __init__(self):
-        super().__init__()
-
-        self.title("ZLG CAN Monitor - 设备初始化")
-        self.geometry("400x400")
-        self.resizable(False, False)
-
-        ctk.set_appearance_mode("dark")
-        ctk.set_default_color_theme("blue")
-
-        self.result = None
-        self.selected_baud = None
-
-        self._build_ui()
-
-        # 居中窗口
-        self.update_idletasks()
-        w = self.winfo_width()
-        h = self.winfo_height()
-        x = (self.winfo_screenwidth() // 2) - (w // 2)
-        y = (self.winfo_screenheight() // 2) - (h // 2)
-        self.geometry(f"+{x}+{y}")
-
-    def _build_ui(self):
-        # 标题
-        ctk.CTkLabel(
-            self, text="ZLG CAN Monitor",
-            font=ctk.CTkFont(size=20, weight="bold")
-        ).pack(pady=(20, 5))
-
-        ctk.CTkLabel(
-            self, text="设备: USBCAN-II",
-            font=ctk.CTkFont(size=12),
-            text_color="#AAAAAA"
-        ).pack(pady=(0, 15))
-
-        # 波特率选择
-        baud_frame = ctk.CTkFrame(self, fg_color="transparent")
-        baud_frame.pack(fill="x", padx=60, pady=(0, 15))
-
-        ctk.CTkLabel(
-            baud_frame, text="波特率:",
-            font=ctk.CTkFont(size=13)
-        ).pack(side="left", padx=(0, 10))
-
-        self.baud_combo = ctk.CTkComboBox(
-            baud_frame, width=160,
-            values=[f"{int(b)//1000}K" if int(b) >= 1000 else b for b in BAUD_RATE_OPTIONS],
-            font=ctk.CTkFont(size=13),
-            state="readonly"
-        )
-        # 默认选中500K
-        default_idx = BAUD_RATE_OPTIONS.index(BAUD_RATE) if BAUD_RATE in BAUD_RATE_OPTIONS else 13
-        self.baud_combo.set(f"{int(BAUD_RATE_OPTIONS[default_idx])//1000}K" if int(BAUD_RATE_OPTIONS[default_idx]) >= 1000 else BAUD_RATE_OPTIONS[default_idx])
-        self.baud_combo.pack(side="left")
-
-        ctk.CTkLabel(
-            baud_frame, text="bps",
-            font=ctk.CTkFont(size=12),
-            text_color="#888888"
-        ).pack(side="left", padx=(8, 0))
-
-        # 分隔
-        ctk.CTkLabel(
-            self, text="选择要打开的通道:",
-            font=ctk.CTkFont(size=13),
-            text_color="#CCCCCC"
-        ).pack(pady=(5, 10))
-
-        # 通道选择按钮
-        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.pack(pady=5)
-
-        ctk.CTkButton(
-            btn_frame, text="仅 CAN0", width=200, height=38,
-            font=ctk.CTkFont(size=14),
-            command=lambda: self._select([0])
-        ).pack(pady=5)
-
-        ctk.CTkButton(
-            btn_frame, text="仅 CAN1", width=200, height=38,
-            font=ctk.CTkFont(size=14),
-            command=lambda: self._select([1])
-        ).pack(pady=5)
-
-        ctk.CTkButton(
-            btn_frame, text="CAN0 + CAN1", width=200, height=38,
-            font=ctk.CTkFont(size=14),
-            fg_color="#4CAF50", hover_color="#388E3C",
-            command=lambda: self._select([0, 1])
-        ).pack(pady=5)
-
-    def _get_baud_value(self):
-        """从下拉框文本还原为实际波特率数值字符串"""
-        text = self.baud_combo.get()
-        # 在下拉框的显示列表中找到对应的原始值
-        display_values = [f"{int(b)//1000}K" if int(b) >= 1000 else b for b in BAUD_RATE_OPTIONS]
-        try:
-            idx = display_values.index(text)
-            return BAUD_RATE_OPTIONS[idx]
-        except ValueError:
-            # 尝试直接解析
-            if text.upper().endswith("K"):
-                return str(int(text[:-1]) * 1000)
-            return text
-
-    def _select(self, channels):
-        self.result = channels
-        self.selected_baud = self._get_baud_value()
-        self.destroy()
-
 
 # ========== 主程序 ==========
 
 if __name__ == "__main__":
     zcanlib = ZCAN()
-
-    # 打开设备
-    device_handle = zcanlib.OpenDevice(ZCAN_USBCAN2, 0, 0)
-    if device_handle == INVALID_DEVICE_HANDLE:
-        # 用简单弹窗提示
-        root = ctk.CTk()
-        root.withdraw()
-        messagebox.showerror("错误", "打开设备失败！\n请检查设备连接和驱动。")
-        root.destroy()
-        sys.exit(1)
-
-    # 显示通道选择对话框
-    setup = SetupDialog()
-    setup.mainloop()
-
-    channels = setup.result
-    if channels is None:
-        # 用户关闭了对话框
-        zcanlib.CloseDevice(device_handle)
-        sys.exit(0)
-
-    # 使用用户选择的波特率
-    if setup.selected_baud:
-        BAUD_RATE = setup.selected_baud
-
-    # 启动通道
-    for chn in channels:
-        handle = start_channel(chn)
-        if handle is None:
-            root = ctk.CTk()
-            root.withdraw()
-            messagebox.showerror("错误", f"启动 CAN{chn} 通道失败！")
-            root.destroy()
-            zcanlib.CloseDevice(device_handle)
-            sys.exit(1)
-        chn_handles[chn] = handle
-        rx_count[chn] = 0
-        tx_count[chn] = 0
-
-    # 启动主界面
     app = CanMonitorApp()
     app.mainloop()
 
