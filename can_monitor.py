@@ -1,21 +1,15 @@
-'''
-    交互式CAN通道控制台 (GUI版 - customtkinter)
-    支持选择打开CAN0/CAN1/同时打开两个通道
-    支持在已打开的通道上发送数据，同时显示接收到的数据
-    报文显示区和操作区完全独立，互不干扰
-'''
-
-from zlgcan import *
 import threading
 import time
-import sys
-import customtkinter as ctk
-from tkinter import messagebox
 from collections import deque
+from tkinter import messagebox
+
+import customtkinter as ctk
+
+from zlgcan import *
 
 # ========== 配置区 ==========
-BAUD_RATE = "500000"    # 默认波特率
-MAX_LOG_LINES = 2000    # 报文区最大显示行数
+BAUD_RATE = "500000"  # 默认波特率
+MAX_LOG_LINES = 2000  # 报文区最大显示行数
 BAUD_RATE_OPTIONS = [
     "10000", "20000", "50000", "100000", "125000",
     "250000", "500000", "800000", "1000000"
@@ -26,10 +20,10 @@ BAUD_RATE_OPTIONS = [
 thread_flag = True
 device_handle = None
 zcanlib = None
-chn_handles = {}        # {通道号: 句柄}
-rx_count = {}           # {通道号: 接收计数}
-tx_count = {}           # {通道号: 发送计数}
-send_history = []       # 发送历史
+chn_handles = {}  # {通道号: 句柄}
+rx_count = {}  # {通道号: 接收计数}
+tx_count = {}  # {通道号: 发送计数}
+send_history = []  # 发送历史
 
 
 # ========== CAN 核心功能 ==========
@@ -149,12 +143,14 @@ class CanMonitorApp(ctk.CTk):
 
         self.baud_combo = ctk.CTkComboBox(
             self.conn_frame, width=100,
-            values=[f"{int(b)//1000}K" if int(b) >= 1000 else b for b in BAUD_RATE_OPTIONS],
+            values=[f"{int(b) // 1000}K" if int(b) >= 1000 else b for b in BAUD_RATE_OPTIONS],
             font=ctk.CTkFont(size=12),
             state="readonly"
         )
         default_idx = BAUD_RATE_OPTIONS.index(BAUD_RATE) if BAUD_RATE in BAUD_RATE_OPTIONS else 13
-        self.baud_combo.set(f"{int(BAUD_RATE_OPTIONS[default_idx])//1000}K" if int(BAUD_RATE_OPTIONS[default_idx]) >= 1000 else BAUD_RATE_OPTIONS[default_idx])
+        self.baud_combo.set(
+            f"{int(BAUD_RATE_OPTIONS[default_idx]) // 1000}K" if int(BAUD_RATE_OPTIONS[default_idx]) >= 1000 else
+            BAUD_RATE_OPTIONS[default_idx])
         self.baud_combo.pack(side="left", padx=(0, 10))
 
         # 连接/断开按钮
@@ -313,7 +309,8 @@ class CanMonitorApp(ctk.CTk):
         self.chn_combo.pack(side="left", padx=(0, 15))
 
         ctk.CTkLabel(row1, text="ID (hex):", font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 5))
-        self.id_entry = ctk.CTkEntry(row1, width=100, font=ctk.CTkFont(size=12, family="Consolas"), placeholder_text="如 1A3")
+        self.id_entry = ctk.CTkEntry(row1, width=100, font=ctk.CTkFont(size=12, family="Consolas"),
+                                     placeholder_text="如 1A3")
         self.id_entry.pack(side="left", padx=(0, 15))
 
         self.ext_var = ctk.BooleanVar(value=False)
@@ -399,7 +396,7 @@ class CanMonitorApp(ctk.CTk):
     def _get_baud_value(self):
         """从下拉框文本还原为实际波特率数值字符串"""
         text = self.baud_combo.get()
-        display_values = [f"{int(b)//1000}K" if int(b) >= 1000 else b for b in BAUD_RATE_OPTIONS]
+        display_values = [f"{int(b) // 1000}K" if int(b) >= 1000 else b for b in BAUD_RATE_OPTIONS]
         try:
             idx = display_values.index(text)
             return BAUD_RATE_OPTIONS[idx]
@@ -701,7 +698,6 @@ class CanMonitorApp(ctk.CTk):
         except Exception:
             pass
 
-
     def _do_send(self):
         """执行发送"""
         # 解析通道
@@ -864,7 +860,6 @@ class CanMonitorApp(ctk.CTk):
         time.sleep(0.1)
         cleanup()
         self.destroy()
-
 
 
 # ========== 主程序 ==========
